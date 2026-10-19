@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+    paths:
+      - '.release-version'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,4 +21,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" wp-performance-auditor.zip --generate-notes
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" != "tag" ]; then TAG="$(cat .release-version)"; fi
+          gh release create "$TAG" wp-performance-auditor.zip --target "${{ github.sha }}" --generate-notes
