@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Performance Auditor
  * Description: Runs Google PageSpeed Insights audits and converts the findings into a WordPress-focused action plan.
- * Version: 1.1.3
+ * Version: 1.1.4
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: JCQ Digital
@@ -20,7 +20,7 @@ defined( 'ABSPATH' ) || exit;
 final class WP_Performance_Auditor {
 	const OPTION_SETTINGS = 'wpa_settings';
 	const OPTION_HISTORY  = 'wpa_history';
-	const VERSION         = '1.1.3';
+	const VERSION         = '1.1.4';
 	const GITHUB_REPOSITORY = 'jmave/wp-performance-auditor';
 	const NONCE_ACTION    = 'wpa_run_audit';
 	const OPTION_ASSET_RULES = 'wpa_asset_rules';
@@ -326,15 +326,16 @@ final class WP_Performance_Auditor {
 		foreach ( array( 'first-contentful-paint' => 'FCP', 'largest-contentful-paint' => 'LCP', 'total-blocking-time' => 'TBT', 'cumulative-layout-shift' => 'CLS', 'speed-index' => 'Speed Index' ) as $id => $label ) {
 			$metrics[] = array( 'label' => $label, 'value' => $audits[ $id ]['displayValue'] ?? '—' );
 		}
-		$opportunities = array();
+		$opportunities = array(); $performance_ids = wp_list_pluck( $categories['performance']['auditRefs'] ?? array(), 'id' );
 		foreach ( $audits as $id => $audit ) {
-			if ( isset( $audit['details']['type'] ) && 'opportunity' === $audit['details']['type'] && ( $audit['score'] ?? 1 ) < 0.9 ) {
+			$audit_type = $audit['details']['type'] ?? ''; $score = $audit['score'] ?? null;
+			if ( in_array( $id, $performance_ids, true ) && in_array( $audit_type, array( 'opportunity', 'diagnostic' ), true ) && null !== $score && $score < 0.9 ) {
 				$resources = array(); if ( in_array( $id, array( 'unused-css-rules', 'unused-javascript' ), true ) ) foreach ( $audit['details']['items'] ?? array() as $resource ) if ( ! empty( $resource['url'] ) ) $resources[] = array( 'url' => esc_url_raw( $resource['url'] ), 'wasted_bytes' => absint( $resource['wastedBytes'] ?? 0 ) );
-				$opportunities[] = array( 'id' => $id, 'title' => $audit['title'] ?? $id, 'description' => $audit['description'] ?? '', 'savings' => $audit['displayValue'] ?? '', 'score' => $audit['score'] ?? 0, 'resources' => $resources );
+				$opportunities[] = array( 'id' => $id, 'title' => $audit['title'] ?? $id, 'description' => $audit['description'] ?? '', 'savings' => $audit['displayValue'] ?? '', 'score' => $score, 'kind' => $audit_type, 'resources' => $resources );
 			}
 		}
 		usort( $opportunities, function( $a, $b ) { return $a['score'] <=> $b['score']; } );
-		$priorities = array_slice( $opportunities, 0, 8 ); foreach ( $opportunities as $opportunity ) if ( in_array( $opportunity['id'], array( 'unused-css-rules', 'unused-javascript' ), true ) && ! in_array( $opportunity['id'], wp_list_pluck( $priorities, 'id' ), true ) ) $priorities[] = $opportunity;
+		$priorities = array_slice( $opportunities, 0, 15 ); foreach ( $opportunities as $opportunity ) if ( in_array( $opportunity['id'], array( 'unused-css-rules', 'unused-javascript' ), true ) && ! in_array( $opportunity['id'], wp_list_pluck( $priorities, 'id' ), true ) ) $priorities[] = $opportunity;
 		return array( 'score' => isset( $categories['performance']['score'] ) ? (int) round( 100 * $categories['performance']['score'] ) : null, 'metrics' => $metrics, 'categories' => array( 'Accessibility' => isset( $categories['accessibility']['score'] ) ? (int) round( 100 * $categories['accessibility']['score'] ) : null, 'Best practices' => isset( $categories['best-practices']['score'] ) ? (int) round( 100 * $categories['best-practices']['score'] ) : null, 'SEO' => isset( $categories['seo']['score'] ) ? (int) round( 100 * $categories['seo']['score'] ) : null ), 'opportunities' => $priorities );
 	}
 
