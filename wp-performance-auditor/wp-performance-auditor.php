@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Performance Auditor
  * Description: Runs Google PageSpeed Insights audits and converts the findings into a WordPress-focused action plan.
- * Version: 1.1.6
+ * Version: 1.2.0
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: JCQ Digital
@@ -20,15 +20,18 @@ defined( 'ABSPATH' ) || exit;
 final class WP_Performance_Auditor {
 	const OPTION_SETTINGS = 'wpa_settings';
 	const OPTION_HISTORY  = 'wpa_history';
-	const VERSION         = '1.1.6';
+	const VERSION         = '1.2.0';
 	const GITHUB_REPOSITORY = 'jmave/wp-performance-auditor';
 	const NONCE_ACTION    = 'wpa_run_audit';
 	const OPTION_ASSET_RULES = 'wpa_asset_rules';
+	const OPTION_SCHEDULE = 'wpa_audit_schedule';
 
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_post_wpa_run_audit', array( $this, 'run_audit' ) );
+		add_action( 'admin_post_wpa_run_bulk_audit', array( $this, 'run_bulk_audit' ) );
+		add_action( 'admin_post_wpa_save_audit_schedule', array( $this, 'save_audit_schedule' ) );
 		add_action( 'admin_post_wpa_save_asset_rule', array( $this, 'save_asset_rule' ) );
 		add_action( 'admin_post_wpa_delete_asset_rule', array( $this, 'delete_asset_rule' ) );
 		add_action( 'admin_post_wpa_set_asset_test_mode', array( $this, 'set_asset_test_mode' ) );
@@ -40,6 +43,7 @@ final class WP_Performance_Auditor {
 		add_action( 'wp_enqueue_scripts', array( $this, 'apply_asset_rules' ), 99999 );
 		add_filter( 'script_loader_tag', array( $this, 'delay_script_tag' ), 20, 3 );
 		add_action( 'wp_footer', array( $this, 'print_delay_loader' ), 1 );
+		add_action( 'wpa_scheduled_audit', array( $this, 'scheduled_audit' ) );
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
 		add_filter( 'plugins_api', array( $this, 'update_information' ), 20, 3 );
 	}
@@ -47,6 +51,9 @@ final class WP_Performance_Auditor {
 	public function admin_menu() {
 		add_menu_page( __( 'Performance Auditor', 'wp-performance-auditor' ), __( 'Performance Auditor', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-auditor', array( $this, 'render_dashboard' ), 'dashicons-chart-line', 81 );
 		add_submenu_page( 'wp-performance-auditor', __( 'Image Compressor', 'wp-performance-auditor' ), __( 'Image Compressor', 'wp-performance-auditor' ), 'upload_files', 'wp-performance-image-compressor', array( $this, 'render_compressor' ) );
+		add_submenu_page( 'wp-performance-auditor', __( 'Bulk Audits', 'wp-performance-auditor' ), __( 'Bulk Audits', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-bulk-audits', array( $this, 'render_bulk_audits' ) );
+		add_submenu_page( 'wp-performance-auditor', __( 'Compare Audits', 'wp-performance-auditor' ), __( 'Compare Audits', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-compare', array( $this, 'render_comparisons' ) );
+		add_submenu_page( 'wp-performance-auditor', __( 'Client Report', 'wp-performance-auditor' ), __( 'Client Report', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-client-report', array( $this, 'render_client_report' ) );
 		add_submenu_page( 'wp-performance-auditor', __( 'Unused CSS & JS', 'wp-performance-auditor' ), __( 'Unused CSS & JS', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-asset-reduction', array( $this, 'render_asset_reduction' ) );
 		add_submenu_page( 'wp-performance-auditor', __( 'Settings', 'wp-performance-auditor' ), __( 'Settings', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-auditor-settings', array( $this, 'render_settings' ) );
 	}
@@ -71,6 +78,7 @@ final class WP_Performance_Auditor {
 		if ( false === strpos( $hook, 'wp-performance-auditor' ) && ! $is_plugin_page ) return;
 		wp_enqueue_style( 'wpa-admin', plugin_dir_url( __FILE__ ) . 'assets/admin.css', array(), self::VERSION );
 		wp_add_inline_style( 'wpa-admin', '.wpa-recommendations{border-left:4px solid #34a853}.wpa-recommendation-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:15px;margin-top:18px}.wpa-recommendation{padding:18px;border:1px solid #dce6f1;border-radius:10px;background:#fbfefd}.wpa-recommendation h3{margin:12px 0 8px}.wpa-recommendation p{margin:8px 0;color:#52606d}.wpa-recommendation small{display:block;min-height:32px;color:#64748b;word-break:break-all}.wpa-recommendation form{margin-top:15px}.wpa-confidence{display:inline-block;padding:3px 7px;border-radius:99px;font-size:11px;font-weight:700}.wpa-confidence.is-high{color:#137333;background:#e6f4ea}.wpa-confidence.is-medium{color:#8a5700;background:#fff4d6}' );
+		wp_add_inline_style( 'wpa-admin', '.wpa-compare-form{display:flex;align-items:end;gap:16px;flex-wrap:wrap}.wpa-compare-form label{display:grid;gap:6px;font-weight:700}.wpa-compare-form select{min-width:260px}.wpa-delta{font-size:15px;font-weight:700}.wpa-delta.is-up{color:#137333}.wpa-delta.is-down{color:#b3261e}.wpa-client-report{background:#fff}.wpa-client-report .wpa-compressor-hero .button{background:#fff;color:#102a5c;border:0}@media print{#adminmenumain,#wpadminbar,.notice,.wpa-client-report .button{display:none!important}.wpa-wrap{margin:0!important}}' );
 		wp_enqueue_script( 'wpa-admin', plugin_dir_url( __FILE__ ) . 'assets/admin.js', array( 'jquery' ), self::VERSION, true );
 		if ( $is_compressor ) {
 			wp_enqueue_media();
@@ -125,6 +133,24 @@ final class WP_Performance_Auditor {
 				<input id="wpa-github-repository" name="wpa_settings[github_repository]" type="text" class="regular-text" value="<?php echo esc_attr( $settings['github_repository'] ?? self::GITHUB_REPOSITORY ); ?>" placeholder="owner/repository">
 				<?php submit_button(); ?>
 			</form></div><?php
+	}
+
+	public function render_bulk_audits() {
+		if ( ! current_user_can( 'manage_options' ) ) return; $schedule = get_option( self::OPTION_SCHEDULE, array( 'frequency' => 'disabled', 'urls' => home_url( '/' ) ) );
+		?><div class="wrap wpa-wrap"><div class="wpa-compressor-hero"><div><span class="wpa-eyebrow"><?php esc_html_e( 'MULTI-PAGE MONITORING', 'wp-performance-auditor' ); ?></span><h1><?php esc_html_e( 'Bulk & Scheduled Audits', 'wp-performance-auditor' ); ?></h1><p><?php esc_html_e( 'Audit priority URLs now, then keep watch automatically.', 'wp-performance-auditor' ); ?></p></div></div>
+		<?php if ( isset( $_GET['wpa_bulk_complete'] ) ) : ?><div class="notice notice-success is-dismissible"><p><?php echo esc_html( sprintf( __( 'Bulk audit complete: %d URL(s) were saved to audit history.', 'wp-performance-auditor' ), absint( $_GET['wpa_bulk_complete'] ) ) ); ?></p></div><?php endif; ?>
+		<?php if ( isset( $_GET['wpa_schedule_saved'] ) ) : ?><div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'Monitoring schedule saved.', 'wp-performance-auditor' ); ?></p></div><?php endif; ?>
+		<div class="wpa-card"><h2><?php esc_html_e( 'Run a bulk audit', 'wp-performance-auditor' ); ?></h2><p class="description"><?php esc_html_e( 'Enter up to 10 public URLs, one per line. Each URL receives a mobile and desktop PageSpeed test.', 'wp-performance-auditor' ); ?></p><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" id="wpa-bulk-form"><input type="hidden" name="action" value="wpa_run_bulk_audit"><?php wp_nonce_field( 'wpa_run_bulk_audit' ); ?><textarea name="urls" rows="8" class="large-text code" required placeholder="<?php echo esc_attr( home_url( '/' ) ); ?>"></textarea><?php submit_button( __( 'Run bulk audit', 'wp-performance-auditor' ), 'primary', 'submit', false ); ?><span class="wpa-audit-progress" hidden><span class="spinner is-active"></span><?php esc_html_e( 'Running audits. This can take several minutes—please keep this tab open.', 'wp-performance-auditor' ); ?></span></form></div>
+		<div class="wpa-card"><h2><?php esc_html_e( 'Scheduled monitoring', 'wp-performance-auditor' ); ?></h2><p><?php esc_html_e( 'WordPress will run these audits when scheduled traffic triggers WP-Cron. A real server cron is recommended for dependable monitoring.', 'wp-performance-auditor' ); ?></p><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="wpa_save_audit_schedule"><?php wp_nonce_field( 'wpa_save_audit_schedule' ); ?><p><label><?php esc_html_e( 'Frequency', 'wp-performance-auditor' ); ?><br><select name="frequency"><option value="disabled" <?php selected( $schedule['frequency'] ?? '', 'disabled' ); ?>><?php esc_html_e( 'Disabled', 'wp-performance-auditor' ); ?></option><option value="daily" <?php selected( $schedule['frequency'] ?? '', 'daily' ); ?>><?php esc_html_e( 'Daily', 'wp-performance-auditor' ); ?></option><option value="weekly" <?php selected( $schedule['frequency'] ?? '', 'weekly' ); ?>><?php esc_html_e( 'Weekly', 'wp-performance-auditor' ); ?></option></select></label></p><p><label><?php esc_html_e( 'URLs to monitor', 'wp-performance-auditor' ); ?><br><textarea name="urls" rows="6" class="large-text code"><?php echo esc_textarea( $schedule['urls'] ?? home_url( '/' ) ); ?></textarea></label></p><?php submit_button( __( 'Save monitoring schedule', 'wp-performance-auditor' ), 'secondary', 'submit', false ); ?></form></div></div><?php
+	}
+
+	public function render_comparisons() {
+		if ( ! current_user_can( 'manage_options' ) ) return; $history = get_option( self::OPTION_HISTORY, array() ); $older = absint( $_GET['older'] ?? 1 ); $newer = absint( $_GET['newer'] ?? 0 ); $current = $history[ $newer ] ?? null; $previous = $history[ $older ] ?? null;
+		?><div class="wrap wpa-wrap"><div class="wpa-compressor-hero"><div><span class="wpa-eyebrow"><?php esc_html_e( 'PERFORMANCE TRENDS', 'wp-performance-auditor' ); ?></span><h1><?php esc_html_e( 'Compare Audits', 'wp-performance-auditor' ); ?></h1><p><?php esc_html_e( 'See whether performance changed between two saved scans.', 'wp-performance-auditor' ); ?></p></div></div><?php if ( count( $history ) < 2 ) : ?><div class="wpa-empty"><p><?php esc_html_e( 'Run at least two audits to compare changes over time.', 'wp-performance-auditor' ); ?></p></div><?php else : ?><form method="get" class="wpa-card wpa-compare-form"><input type="hidden" name="page" value="wp-performance-compare"><label><?php esc_html_e( 'Newer audit', 'wp-performance-auditor' ); ?> <select name="newer"><?php foreach ( $history as $index => $scan ) : ?><option value="<?php echo esc_attr( $index ); ?>" <?php selected( $newer, $index ); ?>><?php echo esc_html( $scan['created_at'] . ' — ' . $scan['url'] ); ?></option><?php endforeach; ?></select></label><label><?php esc_html_e( 'Older audit', 'wp-performance-auditor' ); ?> <select name="older"><?php foreach ( $history as $index => $scan ) : if ( $index === $newer ) continue; ?><option value="<?php echo esc_attr( $index ); ?>" <?php selected( $older, $index ); ?>><?php echo esc_html( $scan['created_at'] . ' — ' . $scan['url'] ); ?></option><?php endforeach; ?></select></label><button class="button button-primary"><?php esc_html_e( 'Compare', 'wp-performance-auditor' ); ?></button></form><?php if ( $current && $previous ) : ?><div class="wpa-scores"><?php foreach ( array( 'mobile' => __( 'Mobile', 'wp-performance-auditor' ), 'desktop' => __( 'Desktop', 'wp-performance-auditor' ) ) as $strategy => $label ) : $now = $current[ $strategy ]['score'] ?? null; $then = $previous[ $strategy ]['score'] ?? null; $delta = ( null !== $now && null !== $then ) ? $now - $then : null; ?><div class="wpa-card"><h2><?php echo esc_html( $label ); ?></h2><div class="wpa-score wpa-score-<?php echo esc_attr( $this->score_band( $now ) ); ?>"><?php echo esc_html( null === $now ? '—' : $now ); ?></div><?php if ( null !== $delta ) : ?><p class="wpa-delta <?php echo $delta >= 0 ? 'is-up' : 'is-down'; ?>"><?php echo esc_html( $delta >= 0 ? '+' : '' ); ?><?php echo esc_html( $delta ); ?> <?php esc_html_e( 'points from selected older audit', 'wp-performance-auditor' ); ?></p><?php else : ?><p class="wpa-muted"><?php esc_html_e( 'A score was not available for this comparison.', 'wp-performance-auditor' ); ?></p><?php endif; ?></div><?php endforeach; ?></div><?php endif; ?><?php endif; ?></div><?php
+	}
+
+	public function render_client_report() {
+		if ( ! current_user_can( 'manage_options' ) ) return; $latest = get_option( self::OPTION_HISTORY, array() )[0] ?? null; ?><div class="wrap wpa-wrap wpa-client-report"><div class="wpa-compressor-hero"><div><span class="wpa-eyebrow">JCQ DIGITAL</span><h1><?php esc_html_e( 'Performance Audit Report', 'wp-performance-auditor' ); ?></h1><p><?php echo $latest ? esc_html( $latest['url'] . ' — ' . $latest['created_at'] ) : esc_html__( 'Run an audit to generate a client-ready report.', 'wp-performance-auditor' ); ?></p></div><button class="button" onclick="window.print()"><?php esc_html_e( 'Print / Save as PDF', 'wp-performance-auditor' ); ?></button></div><?php if ( $latest ) $this->render_report( $latest ); ?></div><?php
 	}
 
 	public function render_compressor() {
@@ -304,9 +330,23 @@ final class WP_Performance_Auditor {
 		if ( ! wp_http_validate_url( $url ) ) $this->redirect( 'invalid_url' );
 		$scan = array( 'url' => $url, 'created_at' => current_time( 'mysql' ), 'mobile' => $this->fetch_strategy( $url, 'mobile' ), 'desktop' => $this->fetch_strategy( $url, 'desktop' ) );
 		if ( ! empty( $scan['mobile']['error'] ) && ! empty( $scan['desktop']['error'] ) ) $this->redirect( 'audit_failed', $scan['mobile']['error'] );
-		$history = get_option( self::OPTION_HISTORY, array() ); array_unshift( $history, $scan ); update_option( self::OPTION_HISTORY, array_slice( $history, 0, 10 ), false );
+		$this->save_scan( $scan );
 		$this->redirect( 'success' );
 	}
+
+	private function save_scan( $scan ) { $history = get_option( self::OPTION_HISTORY, array() ); array_unshift( $history, $scan ); update_option( self::OPTION_HISTORY, array_slice( $history, 0, 30 ), false ); }
+	private function valid_audit_urls( $value ) { $urls = preg_split( '/\r\n|\r|\n/', (string) $value ); $urls = array_values( array_unique( array_filter( array_map( 'esc_url_raw', $urls ), 'wp_http_validate_url' ) ) ); return array_slice( $urls, 0, 10 ); }
+	private function audit_url( $url ) { return array( 'url' => $url, 'created_at' => current_time( 'mysql' ), 'mobile' => $this->fetch_strategy( $url, 'mobile' ), 'desktop' => $this->fetch_strategy( $url, 'desktop' ) ); }
+
+	public function run_bulk_audit() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); check_admin_referer( 'wpa_run_bulk_audit' ); $urls = $this->valid_audit_urls( wp_unslash( $_POST['urls'] ?? '' ) ); foreach ( $urls as $url ) $this->save_scan( $this->audit_url( $url ) ); wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-bulk-audits', 'wpa_bulk_complete' => count( $urls ) ), admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	public function save_audit_schedule() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); check_admin_referer( 'wpa_save_audit_schedule' ); $frequency = in_array( $_POST['frequency'] ?? '', array( 'disabled', 'daily', 'weekly' ), true ) ? $_POST['frequency'] : 'disabled'; $urls = implode( "\n", $this->valid_audit_urls( wp_unslash( $_POST['urls'] ?? '' ) ) ); update_option( self::OPTION_SCHEDULE, array( 'frequency' => $frequency, 'urls' => $urls ), false ); wp_clear_scheduled_hook( 'wpa_scheduled_audit' ); if ( 'disabled' !== $frequency && $urls ) wp_schedule_event( time() + HOUR_IN_SECONDS, $frequency, 'wpa_scheduled_audit' ); wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-bulk-audits', 'wpa_schedule_saved' => 1 ), admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	public function scheduled_audit() { $schedule = get_option( self::OPTION_SCHEDULE, array() ); foreach ( $this->valid_audit_urls( $schedule['urls'] ?? '' ) as $url ) $this->save_scan( $this->audit_url( $url ) ); }
 
 	private function fetch_strategy( $url, $strategy ) {
 		$settings = get_option( self::OPTION_SETTINGS, array() );
@@ -391,4 +431,8 @@ final class WP_Performance_Auditor {
 }
 
 new WP_Performance_Auditor();
+
+register_deactivation_hook( __FILE__, function() {
+	wp_clear_scheduled_hook( 'wpa_scheduled_audit' );
+} );
 
