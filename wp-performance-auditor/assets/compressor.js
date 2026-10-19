@@ -19,6 +19,8 @@
         var tile=$(this), found=selection.some(function(item){return Number(item.id)===Number(tile.data('id'));});
         tile.toggleClass('is-selected',found).attr('aria-pressed',found?'true':'false');
       });
+      var tiles=$('#wpa-media-grid .wpa-media-tile'), all=tiles.length&&tiles.toArray().every(function(el){return $(el).hasClass('is-selected');});
+      $('#wpa-select-visible').text(all?'Clear visible selection':'Select all on this page');
     }
     function loadPage(page){
       $('#wpa-media-grid').addClass('is-loading');
@@ -28,6 +30,10 @@
       }).always(function(){$('#wpa-media-grid').removeClass('is-loading');});
     }
     $('#wpa-media-grid').on('click','.wpa-media-tile',function(){ toggleTile($(this)); });
+    $('#wpa-select-visible').on('click',function(){
+      var tiles=$('#wpa-media-grid .wpa-media-tile'), all=tiles.length&&tiles.toArray().every(function(el){return $(el).hasClass('is-selected');});
+      tiles.each(function(){var tile=$(this), id=Number(tile.data('id')), index=selection.findIndex(function(item){return Number(item.id)===id;}); if(all&&index>-1){selection.splice(index,1);}else if(!all&&index<0){selection.push({id:id,url:tile.data('url'),filename:tile.data('filename')});}}); markSelectedTiles(); updateSelection();
+    });
     $('#wpa-media-pagination').on('click','.wpa-page-button',function(){
       loadPage(Number($(this).data('page')));
     });
