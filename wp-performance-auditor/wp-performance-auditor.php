@@ -2,12 +2,17 @@
 /**
  * Plugin Name: WP Performance Auditor
  * Description: Runs Google PageSpeed Insights audits and converts the findings into a WordPress-focused action plan.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Requires at least: 6.0
  * Requires PHP: 7.4
- * Author: Codex
+ * Author: JCQ Digital
+ * Author URI: https://jcqdigital.com
  * License: GPL-2.0-or-later
  * Text Domain: wp-performance-auditor
+ *
+ * Copyright (c) 2026 JCQ Digital.
+ * Bundled Squoosh components are separately licensed under Apache-2.0;
+ * see assets/squoosh/SQUOOSH-LICENSE.
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -15,21 +20,34 @@ defined( 'ABSPATH' ) || exit;
 final class WP_Performance_Auditor {
 	const OPTION_SETTINGS = 'wpa_settings';
 	const OPTION_HISTORY  = 'wpa_history';
-	const VERSION         = '1.0.0';
+	const VERSION         = '1.1.0';
 	const GITHUB_REPOSITORY = 'jmave/wp-performance-auditor';
 	const NONCE_ACTION    = 'wpa_run_audit';
+	const OPTION_ASSET_RULES = 'wpa_asset_rules';
 
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_post_wpa_run_audit', array( $this, 'run_audit' ) );
+		add_action( 'admin_post_wpa_save_asset_rule', array( $this, 'save_asset_rule' ) );
+		add_action( 'admin_post_wpa_delete_asset_rule', array( $this, 'delete_asset_rule' ) );
+		add_action( 'admin_post_wpa_set_asset_test_mode', array( $this, 'set_asset_test_mode' ) );
+		add_action( 'admin_post_wpa_inspect_assets', array( $this, 'inspect_assets_redirect' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
+		add_action( 'wp_ajax_wpa_compress_images', array( $this, 'compress_images' ) );
+		add_action( 'wp_ajax_wpa_load_media_images', array( $this, 'load_media_images' ) );
+		add_action( 'wp_enqueue_scripts', array( $this, 'maybe_capture_assets' ), 9999 );
+		add_action( 'wp_enqueue_scripts', array( $this, 'apply_asset_rules' ), 99999 );
+		add_filter( 'script_loader_tag', array( $this, 'delay_script_tag' ), 20, 3 );
+		add_action( 'wp_footer', array( $this, 'print_delay_loader' ), 1 );
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
 		add_filter( 'plugins_api', array( $this, 'update_information' ), 20, 3 );
 	}
 
 	public function admin_menu() {
 		add_menu_page( __( 'Performance Auditor', 'wp-performance-auditor' ), __( 'Performance Auditor', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-auditor', array( $this, 'render_dashboard' ), 'dashicons-chart-line', 81 );
+		add_submenu_page( 'wp-performance-auditor', __( 'Image Compressor', 'wp-performance-auditor' ), __( 'Image Compressor', 'wp-performance-auditor' ), 'upload_files', 'wp-performance-image-compressor', array( $this, 'render_compressor' ) );
+		add_submenu_page( 'wp-performance-auditor', __( 'Unused CSS & JS', 'wp-performance-auditor' ), __( 'Unused CSS & JS', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-asset-reduction', array( $this, 'render_asset_reduction' ) );
 		add_submenu_page( 'wp-performance-auditor', __( 'Settings', 'wp-performance-auditor' ), __( 'Settings', 'wp-performance-auditor' ), 'manage_options', 'wp-performance-auditor-settings', array( $this, 'render_settings' ) );
 	}
 
@@ -48,8 +66,16 @@ final class WP_Performance_Auditor {
 	}
 
 	public function assets( $hook ) {
-		if ( false === strpos( $hook, 'wp-performance-auditor' ) ) return;
-		wp_enqueue_style( 'wpa-admin', plugin_dir_url( __FILE__ ) . 'assets/admin.css', array(), '1.0.0' );
+		$page = $_GET['page'] ?? ''; $is_compressor = 'wp-performance-image-compressor' === $page;
+		$is_plugin_page = 0 === strpos( $page, 'wp-performance-' );
+		if ( false === strpos( $hook, 'wp-performance-auditor' ) && ! $is_plugin_page ) return;
+		wp_enqueue_style( 'wpa-admin', plugin_dir_url( __FILE__ ) . 'assets/admin.css', array(), self::VERSION );
+		wp_enqueue_script( 'wpa-admin', plugin_dir_url( __FILE__ ) . 'assets/admin.js', array( 'jquery' ), self::VERSION, true );
+		if ( $is_compressor ) {
+			wp_enqueue_media();
+			wp_enqueue_script( 'wpa-compressor', plugin_dir_url( __FILE__ ) . 'assets/compressor.js', array( 'jquery', 'media-views', 'media-editor', 'wp-util' ), self::VERSION, true );
+			wp_localize_script( 'wpa-compressor', 'wpaCompressor', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'wpa_compress_images' ) ) );
+		}
 	}
 
 	public function render_dashboard() {
@@ -63,13 +89,13 @@ final class WP_Performance_Auditor {
 			<?php $this->notice(); ?>
 			<div class="wpa-card wpa-audit-form">
 				<h2><?php esc_html_e( 'Run a new audit', 'wp-performance-auditor' ); ?></h2>
-				<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+				<form id="wpa-audit-form" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
 					<input type="hidden" name="action" value="wpa_run_audit">
 					<?php wp_nonce_field( self::NONCE_ACTION ); ?>
 					<label for="wpa-url"><?php esc_html_e( 'URL to audit', 'wp-performance-auditor' ); ?></label>
 					<input id="wpa-url" name="url" type="url" class="regular-text" required value="<?php echo esc_attr( home_url( '/' ) ); ?>">
 					<p class="description"><?php esc_html_e( 'Both mobile and desktop reports will be run. A Google PSI API key is recommended for reliable quota.', 'wp-performance-auditor' ); ?> <a href="<?php echo esc_url( admin_url( 'admin.php?page=wp-performance-auditor-settings' ) ); ?>"><?php esc_html_e( 'Configure key', 'wp-performance-auditor' ); ?></a></p>
-					<?php submit_button( __( 'Run PageSpeed audit', 'wp-performance-auditor' ), 'primary', 'submit', false ); ?>
+					<?php submit_button( __( 'Run PageSpeed audit', 'wp-performance-auditor' ), 'primary', 'submit', false ); ?><span id="wpa-audit-progress" class="wpa-audit-progress" hidden><span class="spinner is-active"></span><?php esc_html_e( 'Running mobile and desktop PageSpeed checks. This may take up to two minutes—please keep this tab open.', 'wp-performance-auditor' ); ?></span>
 				</form>
 			</div>
 			<?php if ( $latest ) { $this->render_report( $latest ); } else { ?>
@@ -98,6 +124,160 @@ final class WP_Performance_Auditor {
 				<input id="wpa-github-repository" name="wpa_settings[github_repository]" type="text" class="regular-text" value="<?php echo esc_attr( $settings['github_repository'] ?? self::GITHUB_REPOSITORY ); ?>" placeholder="owner/repository">
 				<?php submit_button(); ?>
 			</form></div><?php
+	}
+
+	public function render_compressor() {
+		if ( ! current_user_can( 'upload_files' ) ) return;
+		?>
+		<div class="wrap wpa-wrap">
+			<div class="wpa-compressor-hero"><div><span class="wpa-eyebrow"><?php esc_html_e( 'MEDIA OPTIMIZATION', 'wp-performance-auditor' ); ?></span><h1><?php esc_html_e( 'Image Compressor', 'wp-performance-auditor' ); ?></h1><p><?php esc_html_e( 'Create lighter WebP copies from one image or an entire batch—without touching your originals.', 'wp-performance-auditor' ); ?></p></div><div class="wpa-hero-badge"><span class="dashicons dashicons-images-alt2"></span><strong><?php esc_html_e( 'Originals protected', 'wp-performance-auditor' ); ?></strong></div></div>
+			<div class="wpa-card wpa-compression-tool">
+				<div class="wpa-steps"><span><b>1</b><?php esc_html_e( 'Select images', 'wp-performance-auditor' ); ?></span><span><b>2</b><?php esc_html_e( 'Set quality', 'wp-performance-auditor' ); ?></span><span><b>3</b><?php esc_html_e( 'Create copies', 'wp-performance-auditor' ); ?></span></div>
+				<div class="wpa-media-header"><div><h2><?php esc_html_e( 'Your image library', 'wp-performance-auditor' ); ?></h2><p><?php esc_html_e( 'Click images to select them. Your original files are never replaced.', 'wp-performance-auditor' ); ?></p></div><span id="wpa-selected-count" class="wpa-selected-count">0 <?php esc_html_e( 'selected', 'wp-performance-auditor' ); ?></span></div>
+				<div class="wpa-media-tools"><label><span class="screen-reader-text"><?php esc_html_e( 'Search images', 'wp-performance-auditor' ); ?></span><span class="dashicons dashicons-search"></span><input id="wpa-media-search" type="search" placeholder="<?php esc_attr_e( 'Search images', 'wp-performance-auditor' ); ?>"></label><label><?php esc_html_e( 'Sort', 'wp-performance-auditor' ); ?> <select id="wpa-media-sort"><option value="newest"><?php esc_html_e( 'Newest first', 'wp-performance-auditor' ); ?></option><option value="oldest"><?php esc_html_e( 'Oldest first', 'wp-performance-auditor' ); ?></option><option value="name"><?php esc_html_e( 'Name A–Z', 'wp-performance-auditor' ); ?></option></select></label></div>
+				<div id="wpa-media-grid" class="wpa-media-grid" aria-label="<?php esc_attr_e( 'Media Library images', 'wp-performance-auditor' ); ?>"><?php echo $this->media_tiles( 1 ); ?></div>
+				<nav id="wpa-media-pagination" class="wpa-media-pagination" aria-label="<?php esc_attr_e( 'Image library pages', 'wp-performance-auditor' ); ?>"><?php echo $this->media_pagination( 1 ); ?></nav>
+				<div class="wpa-compressor-controls"><div class="wpa-selection-hint"><span class="dashicons dashicons-yes-alt"></span><p><?php esc_html_e( 'Select one image for a quick optimization or select a batch to process together.', 'wp-performance-auditor' ); ?></p></div><div class="wpa-quality-control"><label for="wpa-quality"><?php esc_html_e( 'WebP quality', 'wp-performance-auditor' ); ?> <strong id="wpa-quality-value">82</strong></label><input id="wpa-quality" type="range" min="40" max="95" value="82"><small><?php esc_html_e( '82 is the recommended balance of quality and file size.', 'wp-performance-auditor' ); ?></small></div></div>
+				<div id="wpa-selected-images" class="wpa-selected-images" aria-live="polite"></div>
+				<div class="wpa-compressor-footer"><span><?php esc_html_e( 'Optimized copies are saved to your Media Library.', 'wp-performance-auditor' ); ?></span><button type="button" class="button button-primary" id="wpa-compress-images" disabled><?php esc_html_e( 'Create optimized WebP copies', 'wp-performance-auditor' ); ?></button></div><div id="wpa-compression-results" class="wpa-results" aria-live="polite"></div>
+			</div>
+		</div><?php
+	}
+
+	public function render_asset_reduction() {
+		if ( ! current_user_can( 'manage_options' ) ) return;
+		$history = get_option( self::OPTION_HISTORY, array() ); $latest = $history[0] ?? null; $config = $this->asset_config(); $rules = $config['rules']; $discovered = get_user_meta( get_current_user_id(), 'wpa_inspected_assets', true );
+		$items = get_posts( array( 'post_type' => array( 'page', 'post' ), 'post_status' => 'publish', 'posts_per_page' => 100, 'orderby' => 'modified', 'order' => 'DESC' ) );
+		?>
+		<div class="wrap wpa-wrap"><div class="wpa-compressor-hero"><div><span class="wpa-eyebrow"><?php esc_html_e( 'PAGESPEED ASSET REVIEW', 'wp-performance-auditor' ); ?></span><h1><?php esc_html_e( 'Unused CSS & JavaScript', 'wp-performance-auditor' ); ?></h1><p><?php esc_html_e( 'Turn PageSpeed findings into a safer WordPress asset-reduction plan.', 'wp-performance-auditor' ); ?></p></div><div class="wpa-hero-badge"><span class="dashicons dashicons-admin-generic"></span><strong><?php esc_html_e( 'Review before removal', 'wp-performance-auditor' ); ?></strong></div></div>
+			<div class="wpa-card wpa-rule-status"><div><h2><?php esc_html_e( 'Asset rules are', 'wp-performance-auditor' ); ?> <span class="wpa-mode <?php echo ! empty( $config['test_mode'] ) ? 'is-test' : 'is-live'; ?>"><?php echo ! empty( $config['test_mode'] ) ? esc_html__( 'in Test Mode', 'wp-performance-auditor' ) : esc_html__( 'Live', 'wp-performance-auditor' ); ?></span></h2><p><?php echo ! empty( $config['test_mode'] ) ? esc_html__( 'Rules only affect you when you open a public page with ?wpa_asset_test=1 while logged in as an administrator.', 'wp-performance-auditor' ) : esc_html__( 'Rules are active for visitors, except protected checkout, account, login, and form pages.', 'wp-performance-auditor' ); ?></p></div><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="wpa_set_asset_test_mode"><?php wp_nonce_field( 'wpa_asset_mode' ); ?><input type="hidden" name="mode" value="<?php echo ! empty( $config['test_mode'] ) ? 'live' : 'test'; ?>"><button class="button <?php echo ! empty( $config['test_mode'] ) ? 'button-primary' : 'button-secondary'; ?>" type="submit"><?php echo ! empty( $config['test_mode'] ) ? esc_html__( 'Enable live mode', 'wp-performance-auditor' ) : esc_html__( 'Return to test mode', 'wp-performance-auditor' ); ?></button></form></div>
+			<div class="wpa-card"><h2><?php esc_html_e( '1. Discover assets on a page', 'wp-performance-auditor' ); ?></h2><p><?php esc_html_e( 'Open a public page to collect the CSS and JavaScript handles registered by WordPress. Inspect representative pages separately when they use different builders or plugins.', 'wp-performance-auditor' ); ?></p><form class="wpa-inspect-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="wpa_inspect_assets"><?php wp_nonce_field( 'wpa_inspect_assets' ); ?><input type="url" name="url" required value="<?php echo esc_attr( home_url( '/' ) ); ?>" aria-label="<?php esc_attr_e( 'Public page URL', 'wp-performance-auditor' ); ?>"><button type="submit" class="button button-secondary"><?php esc_html_e( 'Discover this page’s assets', 'wp-performance-auditor' ); ?></button></form></div>
+			<div class="wpa-card"><h2><?php esc_html_e( '2. Create a reduction rule', 'wp-performance-auditor' ); ?></h2><p class="description"><?php esc_html_e( 'Use Test Mode first. Only delay non-critical JavaScript; delayed dependencies can break a page until interaction.', 'wp-performance-auditor' ); ?></p><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wpa-rule-form"><input type="hidden" name="action" value="wpa_save_asset_rule"><?php wp_nonce_field( 'wpa_save_asset_rule' ); ?><p><label><?php esc_html_e( 'Asset handle', 'wp-performance-auditor' ); ?><br><input name="handle" required list="wpa-asset-handles" placeholder="plugin-script-handle"></label><datalist id="wpa-asset-handles"><?php foreach ( is_array( $discovered ) ? $discovered : array() as $asset ) : ?><option value="<?php echo esc_attr( $asset['handle'] ); ?>"><?php echo esc_html( $asset['type'] . ' — ' . $asset['src'] ); ?></option><?php endforeach; ?></datalist></p><p><label><?php esc_html_e( 'Type', 'wp-performance-auditor' ); ?><br><select name="asset_type"><option value="style"><?php esc_html_e( 'CSS stylesheet', 'wp-performance-auditor' ); ?></option><option value="script"><?php esc_html_e( 'JavaScript', 'wp-performance-auditor' ); ?></option></select></label></p><p><label><?php esc_html_e( 'Action', 'wp-performance-auditor' ); ?><br><select name="rule_action"><option value="disable"><?php esc_html_e( 'Disable / unload', 'wp-performance-auditor' ); ?></option><option value="delay"><?php esc_html_e( 'Delay until interaction (JavaScript only)', 'wp-performance-auditor' ); ?></option></select></label></p><p><label><?php esc_html_e( 'Apply on', 'wp-performance-auditor' ); ?><br><select name="scope"><option value="global"><?php esc_html_e( 'Every eligible page', 'wp-performance-auditor' ); ?></option><option value="selected"><?php esc_html_e( 'Only the pages/posts selected below', 'wp-performance-auditor' ); ?></option></select></label></p><p><label><?php esc_html_e( 'Selected pages/posts', 'wp-performance-auditor' ); ?><br><select class="wpa-content-select" name="content_ids[]" multiple size="7"><?php foreach ( $items as $content ) : ?><option value="<?php echo esc_attr( $content->ID ); ?>"><?php echo esc_html( ucfirst( $content->post_type ) . ': ' . $content->post_title ); ?></option><?php endforeach; ?></select></label></p><p><label><input type="checkbox" name="protect_critical" value="1" checked> <?php esc_html_e( 'Keep this rule off checkout, cart, account, login, and form pages', 'wp-performance-auditor' ); ?></label></p><button class="button button-primary" type="submit"><?php esc_html_e( 'Save rule', 'wp-performance-auditor' ); ?></button></form></div>
+			<div class="wpa-card"><h2><?php esc_html_e( 'Active reduction rules', 'wp-performance-auditor' ); ?></h2><?php if ( $rules ) : ?><table class="widefat striped wpa-rules"><thead><tr><th><?php esc_html_e( 'Asset', 'wp-performance-auditor' ); ?></th><th><?php esc_html_e( 'Action', 'wp-performance-auditor' ); ?></th><th><?php esc_html_e( 'Scope', 'wp-performance-auditor' ); ?></th><th><?php esc_html_e( 'Protection', 'wp-performance-auditor' ); ?></th><th></th></tr></thead><tbody><?php foreach ( $rules as $id => $rule ) : ?><tr><td><code><?php echo esc_html( $rule['handle'] ); ?></code><br><small><?php echo esc_html( $rule['asset_type'] ); ?></small></td><td><?php echo esc_html( 'delay' === $rule['rule_action'] ? __( 'Delay until interaction', 'wp-performance-auditor' ) : __( 'Disable', 'wp-performance-auditor' ) ); ?></td><td><?php echo 'selected' === $rule['scope'] ? esc_html( sprintf( __( '%d selected page(s)', 'wp-performance-auditor' ), count( $rule['content_ids'] ) ) ) : esc_html__( 'Global', 'wp-performance-auditor' ); ?></td><td><?php echo ! empty( $rule['protect_critical'] ) ? esc_html__( 'Protected', 'wp-performance-auditor' ) : esc_html__( 'Off', 'wp-performance-auditor' ); ?></td><td><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="wpa_delete_asset_rule"><input type="hidden" name="rule_id" value="<?php echo esc_attr( $id ); ?>"><?php wp_nonce_field( 'wpa_delete_asset_rule_' . $id ); ?><button class="button-link-delete" type="submit"><?php esc_html_e( 'Re-enable / remove', 'wp-performance-auditor' ); ?></button></form></td></tr><?php endforeach; ?></tbody></table><?php else : ?><p class="description"><?php esc_html_e( 'No asset rules saved. Discover a page, select a handle, then create your first reversible rule.', 'wp-performance-auditor' ); ?></p><?php endif; ?></div>
+		<?php if ( ! $latest ) : ?><div class="wpa-empty"><p><?php esc_html_e( 'Run a PageSpeed audit first. Its unused CSS and JavaScript findings will appear here.', 'wp-performance-auditor' ); ?></p><a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=wp-performance-auditor' ) ); ?>"><?php esc_html_e( 'Run an audit', 'wp-performance-auditor' ); ?></a></div>
+		<?php else : foreach ( array( 'mobile' => __( 'Mobile', 'wp-performance-auditor' ), 'desktop' => __( 'Desktop', 'wp-performance-auditor' ) ) as $strategy => $label ) : $items = array_filter( $latest[ $strategy ]['opportunities'] ?? array(), function( $item ) { return in_array( $item['id'], array( 'unused-css-rules', 'unused-javascript' ), true ); } ); ?>
+			<div class="wpa-card"><h2><?php echo esc_html( $label ); ?> <?php esc_html_e( 'asset findings', 'wp-performance-auditor' ); ?></h2>
+				<?php if ( $items ) : ?><div class="wpa-asset-grid"><?php foreach ( $items as $item ) : ?><div class="wpa-asset-card"><span class="dashicons <?php echo 'unused-css-rules' === $item['id'] ? 'dashicons-art' : 'dashicons-media-code'; ?>"></span><h3><?php echo esc_html( $item['title'] ); ?></h3><strong><?php echo esc_html( $item['savings'] ); ?></strong><p><?php echo wp_kses_post( $this->wp_advice( $item['id'], $item['description'] ) ); ?></p></div><?php endforeach; ?></div><?php else : ?><p class="description"><?php esc_html_e( 'No unused CSS or JavaScript opportunity was returned in the latest audit for this strategy.', 'wp-performance-auditor' ); ?></p><?php endif; ?>
+			</div>
+		<?php endforeach; endif; ?><div class="wpa-card"><h2><?php esc_html_e( 'Safe implementation order', 'wp-performance-auditor' ); ?></h2><ol class="wpa-priorities"><li><strong><?php esc_html_e( 'Identify the owner.', 'wp-performance-auditor' ); ?></strong><p><?php esc_html_e( 'Check whether the asset is loaded by your theme, a page builder, or a plugin.', 'wp-performance-auditor' ); ?></p></li><li><strong><?php esc_html_e( 'Unload by page or template.', 'wp-performance-auditor' ); ?></strong><p><?php esc_html_e( 'Disable assets only where the related feature is not used; retain sitewide dependencies such as checkout and forms.', 'wp-performance-auditor' ); ?></p></li><li><strong><?php esc_html_e( 'Retest immediately.', 'wp-performance-auditor' ); ?></strong><p><?php esc_html_e( 'Run PageSpeed again and verify critical pages before applying the same rule elsewhere.', 'wp-performance-auditor' ); ?></p></li></ol></div></div><?php
+	}
+
+	private function asset_config() {
+		$config = get_option( self::OPTION_ASSET_RULES, array() );
+		return array( 'test_mode' => ! isset( $config['test_mode'] ) || (bool) $config['test_mode'], 'rules' => is_array( $config['rules'] ?? null ) ? $config['rules'] : array() );
+	}
+
+	public function save_asset_rule() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); check_admin_referer( 'wpa_save_asset_rule' );
+		$handle = sanitize_key( wp_unslash( $_POST['handle'] ?? '' ) ); $type = in_array( $_POST['asset_type'] ?? '', array( 'style', 'script' ), true ) ? $_POST['asset_type'] : 'style'; $action = in_array( $_POST['rule_action'] ?? '', array( 'disable', 'delay' ), true ) ? $_POST['rule_action'] : 'disable';
+		if ( 'style' === $type ) $action = 'disable';
+		$scope = 'selected' === ( $_POST['scope'] ?? '' ) ? 'selected' : 'global'; $ids = array_values( array_filter( array_map( 'absint', (array) ( $_POST['content_ids'] ?? array() ) ) ) );
+		if ( ! $handle || ( 'selected' === $scope && ! $ids ) ) { wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-asset-reduction', 'wpa_rule_error' => 1 ), admin_url( 'admin.php' ) ) ); exit; }
+		$config = $this->asset_config(); $config['rules'][ 'rule_' . time() . '_' . wp_rand( 100, 999 ) ] = array( 'handle' => $handle, 'asset_type' => $type, 'rule_action' => $action, 'scope' => $scope, 'content_ids' => $ids, 'protect_critical' => ! empty( $_POST['protect_critical'] ) ); update_option( self::OPTION_ASSET_RULES, $config, false );
+		wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-asset-reduction', 'wpa_rule_saved' => 1 ), admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	public function delete_asset_rule() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); $id = sanitize_key( $_POST['rule_id'] ?? '' ); check_admin_referer( 'wpa_delete_asset_rule_' . $id ); $config = $this->asset_config(); unset( $config['rules'][ $id ] ); update_option( self::OPTION_ASSET_RULES, $config, false ); wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-asset-reduction', 'wpa_rule_deleted' => 1 ), admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	public function set_asset_test_mode() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); check_admin_referer( 'wpa_asset_mode' ); $config = $this->asset_config(); $config['test_mode'] = 'test' === ( $_POST['mode'] ?? '' ); update_option( self::OPTION_ASSET_RULES, $config, false ); wp_safe_redirect( add_query_arg( 'page', 'wp-performance-asset-reduction', admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	public function inspect_assets_redirect() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'Unauthorized.', 'wp-performance-auditor' ) ); check_admin_referer( 'wpa_inspect_assets' ); $url = esc_url_raw( wp_unslash( $_POST['url'] ?? home_url( '/' ) ) ); $home = wp_parse_url( home_url() ); $target = wp_parse_url( $url );
+		if ( empty( $target['host'] ) || $target['host'] !== $home['host'] ) $url = home_url( '/' );
+		wp_safe_redirect( add_query_arg( 'wpa_asset_inspect', '1', $url ) ); exit;
+	}
+
+	public function maybe_capture_assets() {
+		if ( empty( $_GET['wpa_asset_inspect'] ) || ! current_user_can( 'manage_options' ) ) return;
+		global $wp_scripts, $wp_styles; $assets = array();
+		foreach ( array( array( 'type' => 'style', 'object' => $wp_styles ), array( 'type' => 'script', 'object' => $wp_scripts ) ) as $group ) foreach ( (array) $group['object']->queue as $handle ) { $registered = $group['object']->registered[ $handle ] ?? null; if ( $registered ) $assets[] = array( 'handle' => $handle, 'type' => $group['type'], 'src' => (string) $registered->src ); }
+		update_user_meta( get_current_user_id(), 'wpa_inspected_assets', $assets ); wp_safe_redirect( add_query_arg( array( 'page' => 'wp-performance-asset-reduction', 'wpa_inspected' => 1 ), admin_url( 'admin.php' ) ) ); exit;
+	}
+
+	private function asset_rules_enabled() { $config = $this->asset_config(); return empty( $config['test_mode'] ) || ( ! empty( $_GET['wpa_asset_test'] ) && current_user_can( 'manage_options' ) ); }
+	private function is_protected_asset_context() {
+		if ( is_admin() || defined( 'WP_CLI' ) && WP_CLI ) return true;
+		if ( function_exists( 'is_cart' ) && ( is_cart() || is_checkout() || is_account_page() ) ) return true;
+		if ( is_singular() ) { $slug = (string) get_post_field( 'post_name', get_queried_object_id() ); if ( preg_match( '/(cart|checkout|account|login|contact|form)/i', $slug ) ) return true; }
+		return false;
+	}
+	private function rule_matches_page( $rule ) { return 'global' === $rule['scope'] || ( is_singular() && in_array( (int) get_queried_object_id(), array_map( 'absint', (array) $rule['content_ids'] ), true ) ); }
+	private function active_asset_rules( $type, $action = '' ) { $config = $this->asset_config(); if ( ! $this->asset_rules_enabled() ) return array(); return array_filter( $config['rules'], function( $rule ) use ( $type, $action ) { return $type === ( $rule['asset_type'] ?? '' ) && ( ! $action || $action === ( $rule['rule_action'] ?? '' ) ) && ( empty( $rule['protect_critical'] ) || ! $this->is_protected_asset_context() ) && $this->rule_matches_page( $rule ); } ); }
+
+	public function apply_asset_rules() {
+		if ( is_admin() || ! $this->asset_rules_enabled() ) return;
+		foreach ( $this->active_asset_rules( 'style', 'disable' ) as $rule ) wp_dequeue_style( $rule['handle'] );
+		foreach ( $this->active_asset_rules( 'script', 'disable' ) as $rule ) wp_dequeue_script( $rule['handle'] );
+	}
+
+	public function delay_script_tag( $tag, $handle, $src ) {
+		foreach ( $this->active_asset_rules( 'script', 'delay' ) as $rule ) if ( $handle === $rule['handle'] && $src ) { $tag = preg_replace( '/\s+type=("|\').*?\1/i', '', $tag ); $tag = preg_replace( '/\s+src=("|\').*?\1/i', ' data-wpa-src=$1' . esc_url( $src ) . '$1', $tag ); return str_replace( '<script', '<script type="text/plain" class="wpa-delayed-script"', $tag ); }
+		return $tag;
+	}
+
+	public function print_delay_loader() {
+		if ( ! $this->active_asset_rules( 'script', 'delay' ) ) return; ?><script>(function(){var done=false;function run(){if(done)return;done=true;document.querySelectorAll('script.wpa-delayed-script[data-wpa-src]').forEach(function(old){var s=document.createElement('script');s.src=old.getAttribute('data-wpa-src');s.async=false;old.parentNode.replaceChild(s,old);});}['pointerdown','keydown','touchstart','scroll'].forEach(function(event){window.addEventListener(event,run,{once:true,passive:true});});})();</script><?php
+	}
+
+	public function compress_images() {
+		check_ajax_referer( 'wpa_compress_images', 'nonce' );
+		if ( ! current_user_can( 'upload_files' ) ) wp_send_json_error( array( 'message' => __( 'You do not have permission to compress media.', 'wp-performance-auditor' ) ), 403 );
+		$ids = array_map( 'absint', (array) ( $_POST['ids'] ?? array() ) ); $quality = min( 95, max( 40, absint( $_POST['quality'] ?? 82 ) ) );
+		$results = array();
+		foreach ( array_filter( $ids ) as $id ) {
+			$path = get_attached_file( $id ); $mime = get_post_mime_type( $id );
+			if ( ! $path || ! file_exists( $path ) || 0 !== strpos( (string) $mime, 'image/' ) ) { $results[] = array( 'id' => $id, 'error' => __( 'Not a valid local image.', 'wp-performance-auditor' ) ); continue; }
+			$editor = wp_get_image_editor( $path );
+			if ( is_wp_error( $editor ) || ! in_array( 'image/webp', $editor::supports_mime_type( 'image/webp' ) ? array( 'image/webp' ) : array(), true ) ) { $results[] = array( 'id' => $id, 'error' => __( 'This server cannot create WebP images. Enable Imagick or GD with WebP support.', 'wp-performance-auditor' ) ); continue; }
+			$editor->set_quality( $quality ); $info = pathinfo( $path ); $destination = $info['dirname'] . '/' . sanitize_file_name( $info['filename'] . '-optimized.webp' ); $saved = $editor->save( $destination, 'image/webp' );
+			if ( is_wp_error( $saved ) ) { $results[] = array( 'id' => $id, 'error' => $saved->get_error_message() ); continue; }
+			$attachment = array( 'post_mime_type' => 'image/webp', 'post_title' => sanitize_text_field( get_the_title( $id ) . ' – Optimized' ), 'post_status' => 'inherit', 'post_parent' => (int) get_post_field( 'post_parent', $id ) ); $new_id = wp_insert_attachment( $attachment, $saved['path'], $attachment['post_parent'] );
+			require_once ABSPATH . 'wp-admin/includes/image.php'; wp_update_attachment_metadata( $new_id, wp_generate_attachment_metadata( $new_id, $saved['path'] ) );
+			$results[] = array( 'id' => $id, 'new_id' => $new_id, 'url' => wp_get_attachment_url( $new_id ), 'before' => size_format( filesize( $path ) ), 'after' => size_format( filesize( $saved['path'] ) ) );
+		}
+		wp_send_json_success( array( 'results' => $results ) );
+	}
+
+	/** Render a small, fast, selectable view of the site's image attachments. */
+	private function media_tiles( $page = 1, $search = '', $sort = 'newest' ) {
+		$args = $this->media_query_args( $page, $search, $sort ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
+		if ( ! $query->posts ) return '<p class="wpa-no-media">' . esc_html__( 'No images have been uploaded yet.', 'wp-performance-auditor' ) . '</p>';
+		$html = '';
+		foreach ( $query->posts as $id ) {
+			$thumbnail = wp_get_attachment_image_url( $id, 'medium' );
+			if ( ! $thumbnail ) continue;
+			$html .= '<button type="button" class="wpa-media-tile" data-id="' . esc_attr( $id ) . '" data-url="' . esc_url( $thumbnail ) . '" data-filename="' . esc_attr( get_the_title( $id ) ) . '" aria-pressed="false"><img src="' . esc_url( $thumbnail ) . '" alt=""><span class="wpa-tile-check dashicons dashicons-yes"></span><span class="wpa-tile-label">' . esc_html( get_the_title( $id ) ) . '</span></button>';
+		}
+		return $html;
+	}
+
+	private function media_pagination( $page = 1, $search = '', $sort = 'newest' ) {
+		$args = $this->media_query_args( $page, $search, $sort ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
+		$total = (int) $query->max_num_pages;
+		if ( $total < 2 ) return '';
+		$current = max( 1, absint( $page ) );
+		$start = max( 1, min( $current - 2, $total - 4 ) ); $end = min( $total, max( 5, $current + 2 ) );
+		$html = $current > 1 ? '<button type="button" class="button wpa-page-button" data-page="' . esc_attr( $current - 1 ) . '">&larr; ' . esc_html__( 'Previous', 'wp-performance-auditor' ) . '</button>' : '';
+		for ( $i = $start; $i <= $end; $i++ ) $html .= '<button type="button" class="button wpa-page-button' . ( $i === $current ? ' is-current' : '' ) . '" data-page="' . esc_attr( $i ) . '"' . ( $i === $current ? ' aria-current="page"' : '' ) . '>' . esc_html( $i ) . '</button>';
+		return $html . ( $current < $total ? '<button type="button" class="button wpa-page-button" data-page="' . esc_attr( $current + 1 ) . '">' . esc_html__( 'Next', 'wp-performance-auditor' ) . ' &rarr;</button>' : '' );
+	}
+
+	private function media_query_args( $page, $search, $sort ) {
+		$args = array( 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_mime_type' => 'image', 'posts_per_page' => 24, 'paged' => max( 1, absint( $page ) ) );
+		if ( $search ) $args['s'] = sanitize_text_field( $search );
+		if ( 'oldest' === $sort ) { $args['orderby'] = 'date'; $args['order'] = 'ASC'; } elseif ( 'name' === $sort ) { $args['orderby'] = 'title'; $args['order'] = 'ASC'; } else { $args['orderby'] = 'date'; $args['order'] = 'DESC'; }
+		return $args;
+	}
+
+	public function load_media_images() {
+		check_ajax_referer( 'wpa_compress_images', 'nonce' );
+		if ( ! current_user_can( 'upload_files' ) ) wp_send_json_error( array( 'message' => __( 'You do not have permission to view media.', 'wp-performance-auditor' ) ), 403 );
+		$page = max( 1, absint( $_POST['page'] ?? 1 ) ); $search = sanitize_text_field( wp_unslash( $_POST['search'] ?? '' ) ); $sort = in_array( $_POST['sort'] ?? '', array( 'newest', 'oldest', 'name' ), true ) ? $_POST['sort'] : 'newest';
+		wp_send_json_success( array( 'html' => $this->media_tiles( $page, $search, $sort ), 'pagination' => $this->media_pagination( $page, $search, $sort ) ) );
 	}
 
 	public function run_audit() {
@@ -180,7 +360,7 @@ final class WP_Performance_Auditor {
 	public function update_information( $result, $action, $args ) {
 		if ( 'plugin_information' !== $action || empty( $args->slug ) || 'wp-performance-auditor' !== $args->slug ) return $result;
 		$release = $this->latest_release(); if ( ! $release ) return $result;
-		return (object) array( 'name' => 'WP Performance Auditor', 'slug' => 'wp-performance-auditor', 'version' => $release['version'], 'author' => 'Codex', 'homepage' => $release['url'], 'download_link' => $release['package'], 'sections' => array( 'description' => __( 'Google PageSpeed Insights audits with WordPress-specific recommendations.', 'wp-performance-auditor' ), 'changelog' => $release['body'] ) );
+		return (object) array( 'name' => 'WP Performance Auditor', 'slug' => 'wp-performance-auditor', 'version' => $release['version'], 'author' => 'JCQ Digital', 'homepage' => $release['url'], 'download_link' => $release['package'], 'sections' => array( 'description' => __( 'Google PageSpeed Insights audits with WordPress-specific recommendations.', 'wp-performance-auditor' ), 'changelog' => $release['body'] ) );
 	}
 	private function redirect( $status, $message = '' ) { wp_safe_redirect( add_query_arg( array_filter( array( 'page' => 'wp-performance-auditor', 'wpa_status' => $status, 'wpa_message' => $message ) ), admin_url( 'admin.php' ) ) ); exit; }
 	private function notice() { $status = sanitize_key( $_GET['wpa_status'] ?? '' ); if ( 'success' === $status ) echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Audit complete.', 'wp-performance-auditor' ) . '</p></div>'; if ( in_array( $status, array( 'invalid_url', 'audit_failed' ), true ) ) echo '<div class="notice notice-error"><p>' . esc_html( sanitize_text_field( $_GET['wpa_message'] ?? __( 'Please enter a valid public URL.', 'wp-performance-auditor' ) ) ) . '</p></div>'; }
