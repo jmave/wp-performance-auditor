@@ -1,12 +1,19 @@
 === WP Performance Auditor ===
-Contributors: codex
+Contributors: jcqdigital
 Tags: pagespeed, performance, core-web-vitals, audit
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.5
 License: GPLv2 or later
 
+Copyright (c) 2026 JCQ Digital, except for bundled third-party components.
+
 Run mobile and desktop Google PageSpeed Insights audits from WordPress Admin and receive WordPress-specific recommendations.
+
+Includes a bundled browser-based Squoosh image compressor. Images are processed locally and optimized files are downloaded without overwriting Media Library originals.
+
+== Third-party notices ==
+The bundled Squoosh assets are licensed under Apache-2.0. Its license is included at `assets/squoosh/SQUOOSH-LICENSE`.
 
 == Installation ==
 1. Zip the `wp-performance-auditor` directory.
