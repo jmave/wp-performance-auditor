@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Performance Auditor
  * Description: Runs Google PageSpeed Insights audits and converts the findings into a WordPress-focused action plan.
- * Version: 1.1.0
+ * Version: 1.1.2
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: JCQ Digital
@@ -20,7 +20,7 @@ defined( 'ABSPATH' ) || exit;
 final class WP_Performance_Auditor {
 	const OPTION_SETTINGS = 'wpa_settings';
 	const OPTION_HISTORY  = 'wpa_history';
-	const VERSION         = '1.1.0';
+	const VERSION         = '1.1.2';
 	const GITHUB_REPOSITORY = 'jmave/wp-performance-auditor';
 	const NONCE_ACTION    = 'wpa_run_audit';
 	const OPTION_ASSET_RULES = 'wpa_asset_rules';
@@ -134,7 +134,7 @@ final class WP_Performance_Auditor {
 			<div class="wpa-card wpa-compression-tool">
 				<div class="wpa-steps"><span><b>1</b><?php esc_html_e( 'Select images', 'wp-performance-auditor' ); ?></span><span><b>2</b><?php esc_html_e( 'Set quality', 'wp-performance-auditor' ); ?></span><span><b>3</b><?php esc_html_e( 'Create copies', 'wp-performance-auditor' ); ?></span></div>
 				<div class="wpa-media-header"><div><h2><?php esc_html_e( 'Your image library', 'wp-performance-auditor' ); ?></h2><p><?php esc_html_e( 'Click images to select them. Your original files are never replaced.', 'wp-performance-auditor' ); ?></p></div><span id="wpa-selected-count" class="wpa-selected-count">0 <?php esc_html_e( 'selected', 'wp-performance-auditor' ); ?></span></div>
-				<div class="wpa-media-tools"><label><span class="screen-reader-text"><?php esc_html_e( 'Search images', 'wp-performance-auditor' ); ?></span><span class="dashicons dashicons-search"></span><input id="wpa-media-search" type="search" placeholder="<?php esc_attr_e( 'Search images', 'wp-performance-auditor' ); ?>"></label><label><?php esc_html_e( 'Sort', 'wp-performance-auditor' ); ?> <select id="wpa-media-sort"><option value="newest"><?php esc_html_e( 'Newest first', 'wp-performance-auditor' ); ?></option><option value="oldest"><?php esc_html_e( 'Oldest first', 'wp-performance-auditor' ); ?></option><option value="name"><?php esc_html_e( 'Name A–Z', 'wp-performance-auditor' ); ?></option></select></label></div>
+				<div class="wpa-media-tools"><label><span class="screen-reader-text"><?php esc_html_e( 'Search images', 'wp-performance-auditor' ); ?></span><span class="dashicons dashicons-search"></span><input id="wpa-media-search" type="search" placeholder="<?php esc_attr_e( 'Search images', 'wp-performance-auditor' ); ?>"></label><label><?php esc_html_e( 'Show', 'wp-performance-auditor' ); ?> <select id="wpa-media-status"><option value="all"><?php esc_html_e( 'All images', 'wp-performance-auditor' ); ?></option><option value="needs"><?php esc_html_e( 'Needs optimization', 'wp-performance-auditor' ); ?></option><option value="optimized"><?php esc_html_e( 'Optimized WebP', 'wp-performance-auditor' ); ?></option></select></label><label><?php esc_html_e( 'Sort', 'wp-performance-auditor' ); ?> <select id="wpa-media-sort"><option value="newest"><?php esc_html_e( 'Newest first', 'wp-performance-auditor' ); ?></option><option value="oldest"><?php esc_html_e( 'Oldest first', 'wp-performance-auditor' ); ?></option><option value="name"><?php esc_html_e( 'Name A–Z', 'wp-performance-auditor' ); ?></option></select></label></div>
 				<div id="wpa-media-grid" class="wpa-media-grid" aria-label="<?php esc_attr_e( 'Media Library images', 'wp-performance-auditor' ); ?>"><?php echo $this->media_tiles( 1 ); ?></div>
 				<nav id="wpa-media-pagination" class="wpa-media-pagination" aria-label="<?php esc_attr_e( 'Image library pages', 'wp-performance-auditor' ); ?>"><?php echo $this->media_pagination( 1 ); ?></nav>
 				<div class="wpa-compressor-controls"><div class="wpa-selection-hint"><span class="dashicons dashicons-yes-alt"></span><p><?php esc_html_e( 'Select one image for a quick optimization or select a batch to process together.', 'wp-performance-auditor' ); ?></p></div><div class="wpa-quality-control"><label for="wpa-quality"><?php esc_html_e( 'WebP quality', 'wp-performance-auditor' ); ?> <strong id="wpa-quality-value">82</strong></label><input id="wpa-quality" type="range" min="40" max="95" value="82"><small><?php esc_html_e( '82 is the recommended balance of quality and file size.', 'wp-performance-auditor' ); ?></small></div></div>
@@ -235,28 +235,28 @@ final class WP_Performance_Auditor {
 			if ( is_wp_error( $editor ) || ! in_array( 'image/webp', $editor::supports_mime_type( 'image/webp' ) ? array( 'image/webp' ) : array(), true ) ) { $results[] = array( 'id' => $id, 'error' => __( 'This server cannot create WebP images. Enable Imagick or GD with WebP support.', 'wp-performance-auditor' ) ); continue; }
 			$editor->set_quality( $quality ); $info = pathinfo( $path ); $destination = $info['dirname'] . '/' . sanitize_file_name( $info['filename'] . '-optimized.webp' ); $saved = $editor->save( $destination, 'image/webp' );
 			if ( is_wp_error( $saved ) ) { $results[] = array( 'id' => $id, 'error' => $saved->get_error_message() ); continue; }
-			$attachment = array( 'post_mime_type' => 'image/webp', 'post_title' => sanitize_text_field( get_the_title( $id ) . ' – Optimized' ), 'post_status' => 'inherit', 'post_parent' => (int) get_post_field( 'post_parent', $id ) ); $new_id = wp_insert_attachment( $attachment, $saved['path'], $attachment['post_parent'] );
-			require_once ABSPATH . 'wp-admin/includes/image.php'; wp_update_attachment_metadata( $new_id, wp_generate_attachment_metadata( $new_id, $saved['path'] ) );
-			$results[] = array( 'id' => $id, 'new_id' => $new_id, 'url' => wp_get_attachment_url( $new_id ), 'before' => size_format( filesize( $path ) ), 'after' => size_format( filesize( $saved['path'] ) ) );
+			$before_size = filesize( $path ); update_post_meta( $id, '_wpa_original_file', $path ); update_post_meta( $id, '_wpa_original_mime', $mime ); update_attached_file( $id, $saved['path'] ); wp_update_post( array( 'ID' => $id, 'post_mime_type' => 'image/webp' ) );
+			require_once ABSPATH . 'wp-admin/includes/image.php'; wp_update_attachment_metadata( $id, wp_generate_attachment_metadata( $id, $saved['path'] ) );
+			$results[] = array( 'id' => $id, 'url' => wp_get_attachment_url( $id ), 'before' => size_format( $before_size ), 'after' => size_format( filesize( $saved['path'] ) ) );
 		}
 		wp_send_json_success( array( 'results' => $results ) );
 	}
 
 	/** Render a small, fast, selectable view of the site's image attachments. */
-	private function media_tiles( $page = 1, $search = '', $sort = 'newest' ) {
-		$args = $this->media_query_args( $page, $search, $sort ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
+	private function media_tiles( $page = 1, $search = '', $sort = 'newest', $status = 'all' ) {
+		$args = $this->media_query_args( $page, $search, $sort, $status ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
 		if ( ! $query->posts ) return '<p class="wpa-no-media">' . esc_html__( 'No images have been uploaded yet.', 'wp-performance-auditor' ) . '</p>';
 		$html = '';
 		foreach ( $query->posts as $id ) {
 			$thumbnail = wp_get_attachment_image_url( $id, 'medium' );
 			if ( ! $thumbnail ) continue;
-			$html .= '<button type="button" class="wpa-media-tile" data-id="' . esc_attr( $id ) . '" data-url="' . esc_url( $thumbnail ) . '" data-filename="' . esc_attr( get_the_title( $id ) ) . '" aria-pressed="false"><img src="' . esc_url( $thumbnail ) . '" alt=""><span class="wpa-tile-check dashicons dashicons-yes"></span><span class="wpa-tile-label">' . esc_html( get_the_title( $id ) ) . '</span></button>';
+			$is_webp = 'image/webp' === get_post_mime_type( $id ); $html .= '<button type="button" class="wpa-media-tile" data-id="' . esc_attr( $id ) . '" data-url="' . esc_url( $thumbnail ) . '" data-filename="' . esc_attr( get_the_title( $id ) ) . '" aria-pressed="false"><img src="' . esc_url( $thumbnail ) . '" alt=""><span class="wpa-tile-check dashicons dashicons-yes"></span><span class="wpa-image-status ' . ( $is_webp ? 'is-optimized' : 'is-needs' ) . '">' . esc_html( $is_webp ? __( 'WebP', 'wp-performance-auditor' ) : __( 'Needs optimization', 'wp-performance-auditor' ) ) . '</span><span class="wpa-tile-label">' . esc_html( get_the_title( $id ) ) . '</span></button>';
 		}
 		return $html;
 	}
 
-	private function media_pagination( $page = 1, $search = '', $sort = 'newest' ) {
-		$args = $this->media_query_args( $page, $search, $sort ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
+	private function media_pagination( $page = 1, $search = '', $sort = 'newest', $status = 'all' ) {
+		$args = $this->media_query_args( $page, $search, $sort, $status ); $args['fields'] = 'ids'; $query = new WP_Query( $args );
 		$total = (int) $query->max_num_pages;
 		if ( $total < 2 ) return '';
 		$current = max( 1, absint( $page ) );
@@ -266,8 +266,9 @@ final class WP_Performance_Auditor {
 		return $html . ( $current < $total ? '<button type="button" class="button wpa-page-button" data-page="' . esc_attr( $current + 1 ) . '">' . esc_html__( 'Next', 'wp-performance-auditor' ) . ' &rarr;</button>' : '' );
 	}
 
-	private function media_query_args( $page, $search, $sort ) {
+	private function media_query_args( $page, $search, $sort, $status = 'all' ) {
 		$args = array( 'post_type' => 'attachment', 'post_status' => 'inherit', 'post_mime_type' => 'image', 'posts_per_page' => 24, 'paged' => max( 1, absint( $page ) ) );
+		if ( 'needs' === $status ) $args['post_mime_type'] = array( 'image/jpeg', 'image/png' ); elseif ( 'optimized' === $status ) $args['post_mime_type'] = 'image/webp';
 		if ( $search ) $args['s'] = sanitize_text_field( $search );
 		if ( 'oldest' === $sort ) { $args['orderby'] = 'date'; $args['order'] = 'ASC'; } elseif ( 'name' === $sort ) { $args['orderby'] = 'title'; $args['order'] = 'ASC'; } else { $args['orderby'] = 'date'; $args['order'] = 'DESC'; }
 		return $args;
@@ -276,8 +277,8 @@ final class WP_Performance_Auditor {
 	public function load_media_images() {
 		check_ajax_referer( 'wpa_compress_images', 'nonce' );
 		if ( ! current_user_can( 'upload_files' ) ) wp_send_json_error( array( 'message' => __( 'You do not have permission to view media.', 'wp-performance-auditor' ) ), 403 );
-		$page = max( 1, absint( $_POST['page'] ?? 1 ) ); $search = sanitize_text_field( wp_unslash( $_POST['search'] ?? '' ) ); $sort = in_array( $_POST['sort'] ?? '', array( 'newest', 'oldest', 'name' ), true ) ? $_POST['sort'] : 'newest';
-		wp_send_json_success( array( 'html' => $this->media_tiles( $page, $search, $sort ), 'pagination' => $this->media_pagination( $page, $search, $sort ) ) );
+		$page = max( 1, absint( $_POST['page'] ?? 1 ) ); $search = sanitize_text_field( wp_unslash( $_POST['search'] ?? '' ) ); $sort = in_array( $_POST['sort'] ?? '', array( 'newest', 'oldest', 'name' ), true ) ? $_POST['sort'] : 'newest'; $status = in_array( $_POST['status'] ?? '', array( 'all', 'needs', 'optimized' ), true ) ? $_POST['status'] : 'all';
+		wp_send_json_success( array( 'html' => $this->media_tiles( $page, $search, $sort, $status ), 'pagination' => $this->media_pagination( $page, $search, $sort, $status ) ) );
 	}
 
 	public function run_audit() {
