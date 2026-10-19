@@ -22,7 +22,7 @@
     }
     function loadPage(page){
       $('#wpa-media-grid').addClass('is-loading');
-      $.post(wpaCompressor.ajaxUrl,{action:'wpa_load_media_images',nonce:wpaCompressor.nonce,page:page,search:$('#wpa-media-search').val(),sort:$('#wpa-media-sort').val()}).done(function(response){
+      $.post(wpaCompressor.ajaxUrl,{action:'wpa_load_media_images',nonce:wpaCompressor.nonce,page:page,search:$('#wpa-media-search').val(),sort:$('#wpa-media-sort').val(),status:$('#wpa-media-status').val()}).done(function(response){
         if(!response.success){ return; }
         $('#wpa-media-grid').html(response.data.html); $('#wpa-media-pagination').html(response.data.pagination); markSelectedTiles();
       }).always(function(){$('#wpa-media-grid').removeClass('is-loading');});
@@ -31,7 +31,7 @@
     $('#wpa-media-pagination').on('click','.wpa-page-button',function(){
       loadPage(Number($(this).data('page')));
     });
-    var searchTimer; $('#wpa-media-search').on('input',function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){loadPage(1);},280);}); $('#wpa-media-sort').on('change',function(){loadPage(1);});
+    var searchTimer; $('#wpa-media-search').on('input',function(){clearTimeout(searchTimer);searchTimer=setTimeout(function(){loadPage(1);},280);}); $('#wpa-media-sort,#wpa-media-status').on('change',function(){loadPage(1);});
     $('#wpa-quality').on('input',function(){$('#wpa-quality-value').text(this.value);});
     $('#wpa-compress-images').on('click',function(){
       var button=$(this), results=$('#wpa-compression-results'); button.prop('disabled',true).text('Compressing…'); results.html('<p>Creating optimized copies…</p>');
