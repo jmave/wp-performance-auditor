@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Performance Auditor
  * Description: Runs Google PageSpeed Insights audits and converts the findings into a WordPress-focused action plan.
- * Version: 1.1.5
+ * Version: 1.1.6
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: JCQ Digital
@@ -20,7 +20,7 @@ defined( 'ABSPATH' ) || exit;
 final class WP_Performance_Auditor {
 	const OPTION_SETTINGS = 'wpa_settings';
 	const OPTION_HISTORY  = 'wpa_history';
-	const VERSION         = '1.1.5';
+	const VERSION         = '1.1.6';
 	const GITHUB_REPOSITORY = 'jmave/wp-performance-auditor';
 	const NONCE_ACTION    = 'wpa_run_audit';
 	const OPTION_ASSET_RULES = 'wpa_asset_rules';
@@ -329,8 +329,9 @@ final class WP_Performance_Auditor {
 		$opportunities = array(); $performance_ids = wp_list_pluck( $categories['performance']['auditRefs'] ?? array(), 'id' ); $diagnostic_ids = array( 'bootup-time', 'mainthread-work-breakdown', 'dom-size', 'third-party-summary', 'network-requests', 'network-rtt', 'network-server-latency', 'critical-request-chains', 'largest-contentful-paint-element', 'largest-contentful-paint-image-preload', 'uses-rel-preconnect', 'uses-rel-preload', 'font-display', 'total-byte-weight', 'unminified-css', 'unminified-javascript', 'legacy-javascript', 'efficient-animated-content' );
 		foreach ( $audits as $id => $audit ) {
 			$audit_type = $audit['details']['type'] ?? ''; $score = $audit['score'] ?? null;
-			$is_unscored_diagnostic = 'diagnostic' === $audit_type && null === $score && in_array( $id, $diagnostic_ids, true );
-			if ( in_array( $id, $performance_ids, true ) && in_array( $audit_type, array( 'opportunity', 'diagnostic' ), true ) && ( ( null !== $score && $score < 0.9 ) || $is_unscored_diagnostic ) ) {
+			$is_named_diagnostic = in_array( $id, $diagnostic_ids, true ) && ( null === $score || $score < 0.9 );
+			$is_scored_finding = in_array( $audit_type, array( 'opportunity', 'diagnostic' ), true ) && null !== $score && $score < 0.9;
+			if ( in_array( $id, $performance_ids, true ) && ( $is_scored_finding || $is_named_diagnostic ) ) {
 				$resources = array(); if ( in_array( $id, array( 'unused-css-rules', 'unused-javascript' ), true ) ) foreach ( $audit['details']['items'] ?? array() as $resource ) if ( ! empty( $resource['url'] ) ) $resources[] = array( 'url' => esc_url_raw( $resource['url'] ), 'wasted_bytes' => absint( $resource['wastedBytes'] ?? 0 ) );
 				$opportunities[] = array( 'id' => $id, 'title' => $audit['title'] ?? $id, 'description' => $audit['description'] ?? '', 'savings' => $audit['displayValue'] ?? '', 'score' => null === $score ? 0.89 : $score, 'kind' => $audit_type, 'resources' => $resources );
 			}
